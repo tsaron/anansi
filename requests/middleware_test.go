@@ -88,8 +88,7 @@ func TestLog(t *testing.T) {
 		Logger()
 
 	router.Use(AttachLogger(logger))
-	router.Use(Log)
-	router.Post("/attach", func(w http.ResponseWriter, r *http.Request) {
+	router.With(Log(0)).Post("/", func(w http.ResponseWriter, r *http.Request) {
 		// write to buffer
 		log := zerolog.Ctx(r.Context())
 		log.Info().Msg("")
@@ -97,34 +96,97 @@ func TestLog(t *testing.T) {
 		_, _ = w.Write([]byte(""))
 	})
 
-	name := faker.Name().Name()
-	b, _ := json.Marshal(map[string]string{"name": name})
+	router.With(Log(1024)).Post("/bigrequest", func(w http.ResponseWriter, r *http.Request) {
+		// write to buffer
+		log := zerolog.Ctx(r.Context())
+		log.Info().Msg("")
 
-	res := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/attach", bytes.NewBuffer(b))
-	router.ServeHTTP(res, req)
+		_, _ = w.Write([]byte(""))
+	})
 
-	logs := requestLog{}
-	_ = json.Unmarshal(logOut.Bytes(), &logs)
+	t.Run("logs request and its headers", func(t *testing.T) {
+		type requestLog struct {
+			URL     string                 `json:"url"`
+			Method  string                 `json:"method"`
+			Address string                 `json:"remote_address"`
+			Body    map[string]interface{} `json:"request"`
+		}
 
-	if logs.URL == "" {
-		t.Error("Expected URL to be logged")
-	}
+		defer logOut.Reset()
 
-	if logs.Method == "" {
-		t.Error("Expected request method to be logged")
-	}
+		name := faker.Name().Name()
+		b, _ := json.Marshal(map[string]string{"name": name})
 
-	if logs.Address == "" {
-		t.Error("Expected request address to be logged")
-	}
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/", bytes.NewBuffer(b))
+		req.Header.Add("Authorization", "Bearer "+faker.RandomString(16))
+		req.Header.Add("Content-Type", "application/json; charset=utf-8")
+		router.ServeHTTP(res, req)
 
-	nameInBody, ok := logs.Body["name"].(string)
-	if !ok {
-		t.Errorf("Expected request body to have name as string, got %T", logs.Body["name"])
-	}
+		logs := requestLog{}
+		_ = json.Unmarshal(logOut.Bytes(), &logs)
 
-	if nameInBody != name {
-		t.Errorf("Expected request body to have name as %s, got %s", name, nameInBody)
-	}
+		if logs.URL == "" {
+			t.Error("Expected URL to be logged")
+		}
+
+		if logs.Method == "" {
+			t.Error("Expected request method to be logged")
+		}
+
+		if logs.Address == "" {
+			t.Error("Expected request address to be logged")
+		}
+
+		nameInBody, ok := logs.Body["name"].(string)
+		if !ok {
+			t.Errorf("Expected request body to have name as string, got %T", logs.Body["name"])
+		}
+
+		if nameInBody != name {
+			t.Errorf("Expected request body to have name as %s, got %s", name, nameInBody)
+		}
+	})
+
+	t.Run("truncates large request body", func(t *testing.T) {
+		type requestLog struct {
+			URL     string   `json:"url"`
+			Method  string   `json:"method"`
+			Address string   `json:"remote_address"`
+			Body    []string `json:"request"` // because the request itself is an array
+		}
+
+		defer logOut.Reset()
+
+		var strings []string
+		for i := 0; i < 4; i++ {
+			strings = append(strings, faker.Lorem().Characters(1024))
+		}
+
+		b, _ := json.Marshal(strings)
+
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/bigrequest", bytes.NewBuffer(b))
+		router.ServeHTTP(res, req)
+
+		logs := requestLog{}
+		_ = json.Unmarshal(logOut.Bytes(), &logs)
+
+		if logs.URL == "" {
+			t.Error("Expected URL to be logged")
+		}
+
+		if logs.Method == "" {
+			t.Error("Expected request method to be logged")
+		}
+
+		if logs.Address == "" {
+			t.Error("Expected request address to be logged")
+		}
+
+		// we can't expect 1024 due to how the log is parsed back into JSON
+		if len(logs.Body[0]) > 1024 {
+			t.Errorf("Expected logged request body to be %d, got %d", 1024, len(logs.Body[0]))
+		}
+	})
 }

@@ -17,6 +17,7 @@ type WebpackOpts struct {
 	Environment      string                // Application environment(dev, test e.t.c.)
 	Timeout          time.Duration         // Duration before request context times out. Defaults to 1 minute
 	CompressionLevel int                   // Level of compression for responses, ranging from 1-9. Defaults to 5
+	LogSize          int                   // Maximum size of request & response bodies. Setting to a negative value disables log truncation.
 	CORSOrigins      []string              // list of allowed origins
 	Registry         prometheus.Registerer // registry for prometheus. This is where we add response time collector
 }
@@ -65,7 +66,7 @@ func Webpack(router *chi.Mux, log zerolog.Logger, conf WebpackOpts) {
 	router.Use(middleware.RedirectSlashes)
 
 	router.Use(requests.AttachLogger(log))
-	router.Use(requests.Log)
+	router.Use(requests.Log(conf.LogSize))
 	router.Use(requests.Timeout(conf.Timeout))
 
 	router.Use(responses.ResponseTime)
