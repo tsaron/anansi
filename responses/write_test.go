@@ -19,7 +19,7 @@ func TestSend(t *testing.T) {
 			"name": name,
 		})
 
-		Send(w, 200, b)
+		Write(w, 200, b)
 	})
 
 	res := httptest.NewRecorder()

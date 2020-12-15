@@ -16,7 +16,7 @@ func Success(r *http.Request, w http.ResponseWriter, v interface{}) {
 	log := zerolog.Ctx(r.Context())
 	raw := getJSON(log, v)
 
-	responses.Send(w, http.StatusOK, raw)
+	responses.Write(w, http.StatusOK, raw)
 
 	log.Info().
 		Int("status", http.StatusOK).
@@ -30,7 +30,7 @@ func Error(r *http.Request, w http.ResponseWriter, err Err) {
 	log := zerolog.Ctx(r.Context())
 	raw := getJSON(log, err)
 
-	responses.Send(w, err.Code, raw)
+	responses.Write(w, err.Code, raw)
 
 	log.Err(err).
 		Int("status", err.Code).
