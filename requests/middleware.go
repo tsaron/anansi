@@ -65,12 +65,19 @@ func AttachLogger(log zerolog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
+type Response interface {
+	// Code returns the response code of the response
+	Code() int
+	// Body returns the body of the request as bytes
+	Body() []byte
+}
+
 // Log updates a future log entry with the request parameters such as request ID and headers.
-// Truncates logged request size to maxRequestSize bytes. Set to less than zero to disable
+// Truncates logged request/response size to maxBodySize bytes. Set to less than zero to disable
 // truncation, otherwise it defaults to 8kb
-func Log(maxRequestSize int) func(http.Handler) http.Handler {
-	if maxRequestSize == 0 {
-		maxRequestSize = 8 * 1024
+func Log(maxBodySize int) func(http.Handler) http.Handler {
+	if maxBodySize == 0 {
+		maxBodySize = 8 * 1024
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -83,25 +90,12 @@ func Log(maxRequestSize int) func(http.Handler) http.Handler {
 				})
 			}
 
-			formattedHeaders := make(map[string]interface{})
-
-			for k, v := range r.Header {
-				lowerKey := strings.ToLower(k)
-				if len(v) == 0 {
-					formattedHeaders[lowerKey] = ""
-				} else if len(v) == 1 {
-					formattedHeaders[lowerKey] = v[0]
-				} else {
-					formattedHeaders[lowerKey] = v
-				}
-			}
-
 			log.UpdateContext(func(ctx zerolog.Context) zerolog.Context {
 				return ctx.
 					Str("method", r.Method).
 					Str("remote_address", r.RemoteAddr).
 					Str("url", r.URL.String()).
-					Interface("request_headers", formattedHeaders)
+					Interface("request_headers", toLower(r.Header))
 			})
 
 			requestBody, err := ReadBody(r)
@@ -111,23 +105,56 @@ func Log(maxRequestSize int) func(http.Handler) http.Handler {
 
 			if len(requestBody) != 0 {
 				log.UpdateContext(func(ctx zerolog.Context) zerolog.Context {
-					buffer := new(bytes.Buffer)
-
-					if err := json.Compact(buffer, requestBody); err != nil {
-						panic(err)
-					}
-
-					// only truncate large requests
-					if maxRequestSize > 0 && buffer.Len() > maxRequestSize {
-						buffer.Truncate(maxRequestSize - 3) // leave space for the elipsis(3 bytes)
-						buffer.WriteString("...")
-					}
-
+					buffer := logBody(log, maxBodySize, requestBody)
 					return ctx.RawJSON("request", buffer.Bytes())
 				})
 			}
 
+			defer func() {
+				ww, ok := w.(Response)
+				if !ok {
+					return
+				}
+				log.UpdateContext(func(ctx zerolog.Context) zerolog.Context {
+					buffer := logBody(log, maxBodySize, ww.Body())
+					return ctx.RawJSON("response", buffer.Bytes())
+				})
+			}()
+
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func toLower(headers http.Header) map[string]interface{} {
+	lowerCaseHeaders := make(map[string]interface{})
+
+	for k, v := range headers {
+		lowerKey := strings.ToLower(k)
+		if len(v) == 0 {
+			lowerCaseHeaders[lowerKey] = ""
+		} else if len(v) == 1 {
+			lowerCaseHeaders[lowerKey] = v[0]
+		} else {
+			lowerCaseHeaders[lowerKey] = v
+		}
+	}
+
+	return lowerCaseHeaders
+}
+
+func logBody(log *zerolog.Logger, maxSize int, body []byte) *bytes.Buffer {
+	buffer := new(bytes.Buffer)
+
+	if err := json.Compact(buffer, body); err != nil {
+		panic(err)
+	}
+
+	// only truncate large requests
+	if maxSize > 0 && buffer.Len() > maxSize {
+		buffer.Truncate(maxSize - 3) // leave space for the elipsis(3 bytes)
+		buffer.WriteString("...")
+	}
+
+	return buffer
 }
